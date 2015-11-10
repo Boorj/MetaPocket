@@ -247,7 +247,6 @@ class MetaPocket
     }
 
 
-
     /**
      * Read and parse a YAML configuration file
      *
