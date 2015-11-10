@@ -1,0 +1,52 @@
+# PUT THIS TO YOUR CONFIG DIRECTORY
+
+global:
+  contacts : # in twig:  site_meta('global.contacts.phone') as well as site_meta('contacts.phone')
+    phone : 123456
+
+  siteurl : 'www.yoursite.com' # site_meta('siteurl')
+
+  vars :
+    page_title :
+      default_pattern : '%parts.sitelabel% | %label%'
+      parts :
+        sitelabel : 'Your sitename'
+
+  meta :
+    description   : 'common (or default) description for each page'
+    keywords      : ['123123f','werewr']
+    share :
+      heading       : 'heading for social share (vk.com, for example)'
+      comment       : 'common comment for socials like facebook'
+      comment_short : 'short comment for twitter'
+      image         : '/images/screenshot.jpg'
+
+
+routes :
+  # in twig try:  route_meta('title') , route_meta('comment')
+  home:
+    label : 'Homepage'
+    meta  :
+      description   : 'Описание главной'
+      keywords      : ['df','sdfd']
+      share :
+        comment       : 'Коммент для главной'
+        comment_short : 'Коммент для главной короткий'
+        image         : '/i/image1.png'
+
+  blog:
+    label : 'Blog'
+    meta :
+      description   : 'Описание блога'
+      keywords      : ['кейворды блога','кейворды блога 2']
+
+  post:
+    label : 'Post'
+    title      : '%parts.sitelabel% | %label% - %context.title%'
+    meta :
+      description   : 'post template description (has to be overriden later with record data'
+      keywords      : ['кейворды поста','кейворды поста 2']
+      share :
+        comment       : 'Коммент для поста'
+        comment_short : 'Коммент для поста короткий'
+        image         : '/i/image3.png'
