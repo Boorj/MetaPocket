@@ -6,7 +6,7 @@
  * @todo join record data and other data (route, site).
  *       maybe do that from template like join_record_seo_data_to_current_route
  *       then in template you can use joined data. like records.current
- *
+ * @todo - normalize DELIMITERS - use commas or self::DELIMITER everywhere.
  * */
 
 namespace Bolt\Extension\Mapple\MetaPocketExtension;
@@ -14,7 +14,9 @@ namespace Bolt\Extension\Mapple\MetaPocketExtension;
 use Bolt\Application;
 use Bolt\BaseExtension;
 use Mapple\Site\Logic\Utils;
+use Symfony\Component\Process\Exception\InvalidArgumentException;
 use Symfony\Component\Process\Exception\LogicException;
+use Symfony\Component\Routing\Generator\UrlGeneratorInterface;
 use Symfony\Component\Yaml\Parser;
 use Bolt\Helpers\Arr;
 
@@ -34,10 +36,11 @@ class MetaPocket
     private $yamlParser = false;
 
     private $metas = null;
-
     private $var_tags = [];
-
     private $default_settings = [];
+    private $replacements_global = null;
+    private $mappings = null;
+    private $og_mapping = [];
 
 
     /**
@@ -46,6 +49,10 @@ class MetaPocket
      */
     function __construct($app) {
         $this->app = $app;
+    }
+
+    public function get_all_metas() {
+        return $this->metas;
     }
 
 
@@ -60,9 +67,7 @@ class MetaPocket
         // get data from config.yml and merge
         $this->merge_with_meta_yml();
 
-
         $this->replace_available_vars_in_global();
-
 
         // for each route take some data from 'meta' and 'label' fields.
         $this->inherit_from_routing_yml();
@@ -72,6 +77,7 @@ class MetaPocket
         //make replacing sequence for selected fields in global's and routes' metas
         $this->replace_available_vars_in_routes();
 
+    //        dump($this->metas);
     }
 
 
@@ -81,33 +87,81 @@ class MetaPocket
     private function default_setup() {
         $this->var_tags = ['open'=>'%', 'close'=>'%'];
 
+        $this->replacements_global = [
+            'meta.share.image',
+            'siteurl',
+            'sitename',
+            'vars.page_title.parts.sitelabel',
+            'vars.page_title.default_pattern',
+        ];
+
         $this->default_settings = [
             'global' => [
-                'contacts'=>[],
-                'vars'=>[
+                'siteurl'  => '%bolt.general.canonical%',
+                'sitename' => '%bolt.general.sitename%',
+                'contacts' => [],
+                'vars'     => [
                     'page_title' => [
                         'default_pattern' => '%parts.sitelabel% | %label%',
-                        'parts' => [
-                            'sitelabel' => 'Site Name',
+                        'parts'           => [
+                            'sitelabel' => '%bolt.general.sitename%',
                         ],
                     ],
                 ],
-                'meta' => [
-                    'robots' => '',
-                    'description' => '',
-                    'keywords' => '',
-                    'share' => [
-                        'heading' => '',
-                        'comment' => '',
+                'meta'     => [
+                    'robots'      => '',
+                    'description' => '%bolt.general.payoff%',
+                    'keywords'    => '',
+                    'share'       => [
+                        'heading'       => '',
+                        'comment'       => '',
                         'comment_short' => '',
-                        'image' => 'http://%global.siteurl%/i/screenshot.jpg',
+                        'image'         => 'http://%global.siteurl%/i/screenshot.jpg',
                     ],
+                    'og_type'    => 'website',
                 ],
             ],
             'routes' => [
                 'home' => [
                     'title' => '%parts.sitelabel%',
                 ],
+            ],
+        ];
+
+        $this->og_mapping = [
+            'url'         => 'url',
+            'image'       => 'share_image',
+            'title'       => 'share_heading',
+            'description' => 'meta_description',
+            'site_name'   => 'share_sitename',
+            'type'        => 'og_type',
+        ];
+
+        $this->mappings = [
+            'site' => [
+                'share_sitename'      => 'site:sitename'         ,
+                'og_type'             => 'site:meta.og_type'        ,
+            ],
+            'route' => [
+                'meta_description'    => 'route:meta.description',
+                'meta_keywords'       => 'route:meta.keywords'   ,
+                'share_heading'       => 'route:meta.share.heading'      ,
+                'share_comment'       => 'route:meta.share.comment'      ,
+                'share_comment_short' => 'route:meta.share.comment_short',
+                'share_image'         => 'route:meta.share.image'        ,
+                'share_sitename'      => 'site:sitename'         ,
+
+                'og_type'             => 'route:meta.og_type'        ,
+            ],
+            'record' => [
+                'meta_description'    => ['record:meta_description', 'record:teaser', 'record:share_comment', 'record:share_comment_short' ]    ,
+                'meta_keywords'       => ['record:meta_keywords']         ,
+                'share_heading'       => ['record:share_heading', 'record:title']       , // @todo : inheritance
+                'share_comment'       => 'record:share_comment'       ,
+                'share_comment_short' => ['record:share_comment_short', 'record:title'] ,
+                'share_image'         => ['record:share_image', 'site:meta.share.image']         ,
+                'share_sitename'      => 'site:sitename'         ,
+                'og_type'             => 'record:og_type'             ,
             ],
         ];
 
@@ -124,6 +178,16 @@ class MetaPocket
     }
 
 
+
+    private function add_prefix_if_needed($prefix, $string) {
+        $seq = $string;
+        if (strpos($seq, $prefix) !== 0)
+            $seq = $prefix . $seq;
+        return $seq;
+    }
+
+
+
     /**
      * merge_with_meta_yml
      */
@@ -132,6 +196,16 @@ class MetaPocket
             $this->default_settings,
             $this->parseConfigYaml('meta.yml')
         );
+    }
+
+
+    /**
+     * replace_available_vars_in_global
+     */
+    protected function replace_available_vars_in_global () {
+        $replace_list = $this->replacements_global;
+        foreach ($replace_list as $seq)
+            $this->replace_value(self::GLOBAL_PATH . '.' . $seq);
     }
 
 
@@ -173,24 +247,42 @@ class MetaPocket
     }
 
 
-    protected function replace_available_vars_in_global () {
-        $this->replace_value(self::VARS_PATH.  '.page_title.default_pattern');
-        $this->replace_value(self::GLOBAL_PATH.'.meta.share.image');
-
-    }
 
 
     private function fill_blank_fields_for_routes() {
         $default_pattern = $this->get_meta_value_by_seq(self::VARS_PATH.'.page_title.default_pattern');
-        $default_image  = $this->get_meta_value_by_seq(self::GLOBAL_PATH.'.meta.share.image');
+        $default_image   = $this->get_meta_value_by_seq(self::GLOBAL_PATH.'.meta.share.image');
+        $default_og_type = $this->get_meta_value_by_seq(self::GLOBAL_PATH.'.meta.og_type');
 
         foreach ($this->metas['routes'] as $route_name => $route) {
             if (empty($route['title'])) {
                 $this->set_meta_value("routes.{$route_name}.title", $default_pattern);
             }
+
             $image = $this->get_meta_value_by_seq("routes.{$route_name}.meta.share.image");
             if (empty($image)) {
                 $this->set_meta_value("routes.{$route_name}.meta.share.image", $default_image);
+            }
+
+            $og_type = $this->get_meta_value_by_seq("routes.{$route_name}.meta.og_type");
+            if (empty($og_type)) {
+                $this->set_meta_value("routes.{$route_name}.meta.og_type", $default_og_type);
+            }
+
+
+            // checking <route>.parent for existence and correctness
+            if (isset($route['parent'])) {
+                $parent = $route['parent'];
+                if (!is_string($parent)){
+                    unset($this->metas['routes'][$route_name]['parent']);
+                }
+                else {
+                    $parent = trim($route['parent']);
+                    if (empty($parent) || !isset($this->metas['routes'][$parent]))
+                        unset($this->metas['routes'][$route_name]['parent']);
+                    else
+                        $this->metas['routes'][$route_name]['parent'] = $parent;
+                }
             }
         }
     }
@@ -260,7 +352,6 @@ class MetaPocket
         $value = null;
         $seq = false;
 
-
         // if there's a delimiter ("." by default) in string
         $first_delimiter_pos = strpos($var_slug, $delimiter);
         if ($first_delimiter_pos !== false  &&  $first_delimiter_pos > 0) {
@@ -287,12 +378,10 @@ class MetaPocket
                     }
                     break;
 
-                // @todo - get bolt data
-//                case 'bolt':
-//                    if (!empty($additional_vars['context'])) {
-//                        $value = $this->_get_value($additional_vars['context'], $rest_part, null);
-//                    }
-//                    break;
+                case 'bolt':
+                    $rest_part = str_replace(self::DELIMITER, '/', $rest_part);
+                    $value = $this->app['config']->get($rest_part);
+                    break;
             }
         }
 
@@ -421,24 +510,28 @@ class MetaPocket
     }
 
 
-    private function get_all_metas_for_route ($route = false) {
-        if (!$route) {
-            $route = $this->app['request_stack']->getCurrentRequest()->get('_route');
+    private function get_all_metas_for_route ($route_name = false) {
+        if (!$route_name) {
+            $route_name = $this->app['request_stack']->getCurrentRequest()->get('_route');
         }
-//        if (!isset($this->metas['routes'][$route]))
-//            throw new LogicException('no such route - ' . $route);
-
-        return $this->metas['routes'][$route];
+        if (isset($this->metas['routes'][$route_name])){
+            $route_data = $this->metas['routes'][$route_name];
+            $route_data['name'] = $route_name;
+            return $route_data;
+        }
+        else
+            throw new \LogicException("no such route: $route_name");
     }
 
 
     protected function get_seq_by_meta_name ($meta) {
-        $seq = '';
+//        $seq = '';
+        $seq = $meta;
         switch ($meta) {
-            case 'title' :
-            case 'label' :
-                $seq = $meta;
-                break;
+//            case 'title' :
+//            case 'label' :
+//                $seq = $meta;
+//                break;
 
             case 'description' :
             case 'keywords' :
@@ -455,45 +548,13 @@ class MetaPocket
         return $seq;
     }
 
-    protected function print_meta ($meta, $data) {
-        switch ($meta) {
-            case 'title'    : return
-                '<title>'.trim($data).'</title>';
 
-            case 'keywords' :
-                if (is_array($data) || is_string($data)) {
-                    $keywords = (is_string($data) ? trim($data) : implode(', ', $data));
-                    return '<meta name="keywords" content="' . $keywords . '"/>';
-                }
-                break;
-
-            case 'image'    :
-                return
-                    '<meta itemprop="image" content="'.$data.'">'
-                   .'<link rel="image_src" href="'    .$data.'">';
-
-            case 'description'    :
-                return '<meta name="description" content="'.$data.'">';
-        }
-        return '';
-    }
 
 
     //——————————————————————————————————————————————————————————————————————
     // PUBLIC
     //——————————————————————————————————————————————————————————————————————
 
-
-    public function print_route_meta ($seq, $route = false) {
-        $meta = $this->get_meta_for_route($seq, $route);
-
-        return ($meta) ? $this->print_meta($seq, $meta) : '';
-    }
-
-    public function print_site_meta ($seq) {
-        $meta = $this->get_meta_for_route($seq);
-        return ($meta) ? $this->print_meta($seq, $meta) : '';
-    }
 
 
     /**
@@ -538,9 +599,21 @@ class MetaPocket
     }
 
 
-    public function get_meta_for_route ($seq, $context = false, $route = false) {
+
+    /**
+     * get_meta_for_route
+     * @param            $seq
+     * @param bool|false $context
+     * @param bool|false $route
+     * @return mixed|null
+     */
+    public function get_meta_for_route ($seq, $arg1 = false, $arg2 = false) {
+        // detecting where's context, where's route slug
         $args = func_get_args();
 
+
+        $context = false;
+        $route   = false;
         if (count($args) > 1)
             for ($i=1; $i < count($args); $i++) {
                 $arg = $args[$i];
@@ -550,6 +623,8 @@ class MetaPocket
                     $context = $arg;
             }
 
+
+        // getting all route metas (with current route detection if it's false)
         $route_metas = $this->get_all_metas_for_route($route);
 
         $is_seq = (strpos($seq, self::DELIMITER) !== false);
@@ -559,11 +634,22 @@ class MetaPocket
 
         $result = $this->_get_value($route_metas, $seq);
 
-        return ($context === false)
-            ? $result
-            : $this->replace_vars_string($result, ['context' => $context]);
+        if ($context !== false)
+//            $result = $this->replace_contexted($seq, $result, $context);
+            $result = $this->replace_vars_string($result, ['context' => $context]);
+        return $result;
 
     }
+
+
+
+    public function replace_contexted ($string, $context) {
+        $result = $this->replace_vars_string($string, ['context' => $context]);
+        return $result;
+    }
+
+
+
 
 
 //    public function get_meta_for_route_contexted ($seq, $context, $route = false) {
@@ -598,5 +684,235 @@ class MetaPocket
 //
 //        return $result;
 //    }
+
+
+
+
+    /**
+     * get_canonical_url
+     * getting canonical url with diferent arguments.
+     * @param string|bool    $route   - could be route name or false
+     * @param object|bool    $record  - could be a record or false
+     * @return string
+     */
+    public function get_canonical_url($route = false, $record = false) {
+        $request = $this->app['request_stack']->getCurrentRequest();
+
+        $canonical = $this->metas['global']['siteurl'] ?: $this->app['config']->get('general/canonical');
+
+        $base_url = $canonical  ?:  $request->getBaseUrl();
+
+        $canonical_base = $request->getScheme().'://' . $base_url;
+
+        if ($route === false) { // for current route
+            $path = $request->getPathInfo();
+        }
+        elseif ($route === '' || $route === '/') { //syntax sugar for for homepage route
+            $path = '/';
+        }
+        else {
+            if ($record === false) { // it's a route
+                $url_opts = [];
+                $path = $this->app['url_generator']->generate($route, $url_opts, UrlGeneratorInterface::ABSOLUTE_PATH);
+            }
+            else {  // it's a record
+                if (method_exists($record, 'get') && $record->get('slug')) {
+                    $url_opts = ['slug' => $record->getSlug()];
+                    $path = $this->app['url_generator']->generate($route, $url_opts, UrlGeneratorInterface::ABSOLUTE_PATH);
+                }
+                else {
+                    $path = '';
+                }
+            }
+        }
+        return $canonical_base . $path;
+    }
+
+
+
+
+
+    /**
+     * get_hard_var
+     * @param             $type
+     * @param             $sequence
+     * @param array|bool $route_data
+     * @param object|bool $record_data
+     * @return string
+     */
+    function get_hard_var ($type, $sequence, $route_data=false, $record_data=false) {
+
+        // example 'route:meta.share.comment_short'
+        $sequence = explode(':', trim($sequence));
+        if (count($sequence) > 1) {
+            $where = $sequence[0];
+            $what  = $sequence[1];
+        }
+        else {
+            $where = $type;
+            $what  = $sequence[0];
+        }
+
+        $seq = $what;
+
+        switch ($where ) {
+            case 'site':
+                $seq = $this->add_prefix_if_needed(self::GLOBAL_PATH.'.', $seq);
+                $value = $this->get_meta_value_by_seq($seq);
+                $value = $this->replace_vars_string($value);
+                break;
+            case 'route':
+                $seq = $this->add_prefix_if_needed("routes.{$route_data['name']}.", $seq);
+                $value = $this->get_meta_value_by_seq($seq);
+                $value = $this->replace_vars_string($value);
+                break;
+            case 'record':
+                $value = $record_data->get($what);
+                break;
+
+            default :
+                throw new InvalidArgumentException('Wrong share type in generate_share_data : '. (is_string($where) ? $where : ' wrong type'));
+        }
+
+        return $value;
+
+    }
+
+
+
+    /**
+     * generate_share_data
+     * @param string|object|bool|false $route_name
+     * @param string|object|bool|false $subject
+     * @return array
+     */
+    public function generate_share_data ($route_name = false, $subject = false) {
+        if ($route_name === false ) { // if ()
+            $type = 'route';
+            $route_name = $this->app['request_stack']->getCurrentRequest()->get('_route');
+        }
+        else {
+            if ($subject === false) { // if only 1 arg.
+                if ($route_name === 'site') { // if ('site')
+                    $type = 'site';
+                }
+                elseif (is_string($route_name)) { // if (string)
+                    $type = 'route';
+                }
+                else {// if (object)
+                    $subject = $route_name;
+                    $route_name = false;
+                    $type = 'record';
+                }
+            }
+            elseif (!is_string($subject)) { // if (string, object)
+                $type = 'record';
+            }
+            else {  // if (string, string) - wtf?
+                throw new InvalidArgumentException('Wrong share type in generate_share_data. Second argument == : '. $subject);
+            }
+        }
+
+        if ($type === 'route' && !isset($this->metas['routes'][$route_name]))
+            throw new InvalidArgumentException('There\'s no such route in generate_share_data : ' . $route_name . ' among [' . implode(array_keys($this->metas['routes']), ', ' ). ']' );
+
+        $shares      = [];
+        $route_data  = false;
+        $record_data = false;
+        switch ( $type ) {
+            case 'site':
+                $shares['url'] = $this->get_canonical_url('/');
+                break;
+            case 'route':
+                $route_data  = $this->get_all_metas_for_route($route_name);
+                $shares['url'] = $this->get_canonical_url($route_name);
+                break;
+            case 'record':
+                $record_data = $subject;
+                $route_data  = $this->get_all_metas_for_route();
+                $shares['url'] = $this->get_canonical_url($route_name, $record_data);
+                break;
+        }
+
+        $mapping = $this->mappings[$type];
+
+        foreach ($mapping as $share_name => $sequences) {
+            $sequences = $mapping[$share_name];
+
+            if (is_string($sequences))
+                $sequences = [$sequences];
+
+            foreach ($sequences as $sequence) {
+                $value = $this->get_hard_var($type, $sequence, $route_data, $record_data);
+
+                if (!empty($value)) {
+                    $shares[$share_name] = $value;
+                    break;
+                }
+            }
+        }
+        return $shares;
+    }
+
+
+    public function print_all_ogs ($route_name = false, $subject = false) {
+//        $ogs = $this->metapocket->generate_all_ogs($route_name, $subject);
+
+
+        if (is_array($route_name))
+            $data = $route_name;
+        else
+            $data = $this->generate_share_data($route_name, $subject);
+
+        $ogs = [];
+        foreach ($this->og_mapping as $og_name => $option_name) {
+            if (isset($data[$option_name]))
+                $ogs[$og_name] = $data[$option_name];
+        }
+
+        $metas = [];
+        foreach ($ogs as $og_name => $og_value) {
+            $metas []= "<meta name='og:{$og_name}' content='{$og_value}'/>";
+        }
+        return implode($metas, "\n");
+    }
+
+
+//    public function get_social($social, $route_name = false, $subject = false) {
+//        $options = $this->metapocket->generate_share_data($route_name, $subject);
+//        dump($options);
+//    }
+
+
+    /**
+     * generate_og_url
+     * @param $og
+     * @param $options
+     */
+//    public function generate_one_og ($og, $options) {
+//        $og_field_name = $this->og_mapping[$og];
+//        return $options[$og_field_name];
+//    }
+
+    public function generate_all_ogs ($route_name = false, $subject = false) {
+        if (is_array($route_name))
+            $data = $route_name;
+        else
+            $data = $this->generate_share_data($route_name, $subject);
+
+        $ogs = [];
+        foreach ($this->og_mapping as $og_name => $option_name) {
+            if (isset($data[$option_name]))
+                $ogs[$og_name] = $data[$option_name];
+        }
+        return $ogs;
+    }
+
+    //    image
+    //    title
+    //    url
+    //    description
+    //    site_name
+    //    type
 
 }

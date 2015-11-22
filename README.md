@@ -1,6 +1,9 @@
 Meta Pocket Extension
 ======================
-Collects lots of data
+There's no BC guaranteed, so use it at your own risk. 
+Extension will be heavily refactored.
+
+
 
 1. put meta.yml to your config directory
 2. use site_meta(meta_sequence) . sequence is 'global.suteurl' or 'global.meta.description'
